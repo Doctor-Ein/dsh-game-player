@@ -1,0 +1,28 @@
+# 运行期产物，不进版本库
+*.log
+.snapshots/
+
+# 测试用的截图/录像帧（体积大，且随时可再生成）
+tools/chk*.png
+tools/scan*.png
+tools/strip*.png
+tools/rec-*.png
+tools/ic-*.png
+tools/icons-*.png
+tools/v*.png
+tools/sheet-*.png
+tools/qteframe-*.png
+tools/hits-*.png
+tools/recheck-qte.png
+tools/qte-tape.png
+tools/qte-ref.jpg
+tools/qte-real.jpg
+tools/qte-flag.png
+
+# 保留：运行时真正要用的模板
+!tools/tpl3-counter.png
+!tools/tpl3-flag.png
+!tools/tpl2-counter.png
+!tools/tpl2-flag.png
+!tools/tpl-counter.png
+!tools/tpl-flag.png

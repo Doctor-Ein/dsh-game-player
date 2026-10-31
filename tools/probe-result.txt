@@ -1,0 +1,9 @@
+﻿=== probe start 07:51:47 ===
+elevated: True
+game: hwnd=1574288 pid=24920 2560x1440 at 0,0
+game process readable: ZenlessZoneZero  path=
+foreground after focus: True
+F1  changed:    -> C:\Users\26338\Fairy\packages\dsh-game-player\tools\probe-f1.png
+Esc changed:    -> C:\Users\26338\Fairy\packages\dsh-game-player\tools\probe-esc.png
+W   changed:    -> C:\Users\26338\Fairy\packages\dsh-game-player\tools\probe-w.png
+=== probe end ===
