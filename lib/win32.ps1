@@ -58,16 +58,42 @@ public static class Gp {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint type);
-    [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] static extern IntPtr GetThreadDpiAwarenessContext();
+    [DllImport("user32.dll")] static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
+
+    // Per-monitor awareness exposes physical pixels directly. Never multiply these by DPI again.
+    public static void EnsurePhysicalCoordinates() {
+        if (SetThreadDpiAwarenessContext(new IntPtr(-4)) == IntPtr.Zero)
+            SetThreadDpiAwarenessContext(new IntPtr(-3));
+        if (GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()) != 2)
+            throw new InvalidOperationException("Cannot enable per-monitor DPI awareness (Windows 10 1607+ required)");
+    }
+
+    static void Send(INPUT input) {
+        if (SendInput(1, new INPUT[] { input }, InputSize) != 1)
+            throw new InvalidOperationException("SendInput rejected input; check elevation/input desktop. Win32=" + Marshal.GetLastWin32Error());
+    }
+
+    public static int NormalizeAbsolute(int value, int origin, int size) {
+        if (size <= 1 || value < origin || (long)value >= (long)origin + size)
+            throw new ArgumentOutOfRangeException("value", "Point is outside the virtual desktop");
+        // Aim at the pixel centre, including both endpoints of the 16-bit input range.
+        return Math.Min(65535, (int)Math.Floor(((double)value - origin + 0.5) * 65536.0 / size));
+    }
+
     public const uint INPUT_MOUSE = 0, INPUT_KEYBOARD = 1;
     public const uint ME_MOVE = 0x0001, ME_LEFTDOWN = 0x0002, ME_LEFTUP = 0x0004,
                       ME_RIGHTDOWN = 0x0008, ME_RIGHTUP = 0x0010, ME_MIDDLEDOWN = 0x0020,
-                      ME_MIDDLEUP = 0x0040, ME_WHEEL = 0x0800, ME_ABSOLUTE = 0x8000;
+                      ME_MIDDLEUP = 0x0040, ME_WHEEL = 0x0800, ME_VIRTUALDESK = 0x4000, ME_ABSOLUTE = 0x8000;
     public const uint KE_EXTENDED = 0x0001, KE_KEYUP = 0x0002, KE_SCANCODE = 0x0008;
 
     static readonly int InputSize = Marshal.SizeOf(typeof(INPUT));
@@ -89,8 +115,7 @@ public static class Gp {
             type = INPUT_KEYBOARD,
             u = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0, wScan = scan, dwFlags = flags, time = 0 } }
         };
-        var arr = new INPUT[] { inp };
-        SendInput(1, arr, InputSize);
+        Send(inp);
     }
 
     public static void MouseMoveRel(int dx, int dy) {
@@ -98,19 +123,20 @@ public static class Gp {
             type = INPUT_MOUSE,
             u = new INPUTUNION { mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = ME_MOVE } }
         };
-        SendInput(1, new INPUT[] { inp }, InputSize);
+        Send(inp);
     }
 
     public static void MouseMoveAbs(int x, int y) {
-        int sw = GetSystemMetrics(0), sh = GetSystemMetrics(1);
-        if (sw <= 1 || sh <= 1) return;
-        int nx = (int)Math.Round(x * 65535.0 / (sw - 1));
-        int ny = (int)Math.Round(y * 65535.0 / (sh - 1));
+        EnsurePhysicalCoordinates();
+        if (MonitorFromPoint(new POINT { X = x, Y = y }, 0) == IntPtr.Zero)
+            throw new ArgumentOutOfRangeException("point", "Point is in a gap between monitors");
+        int nx = NormalizeAbsolute(x, GetSystemMetrics(76), GetSystemMetrics(78));
+        int ny = NormalizeAbsolute(y, GetSystemMetrics(77), GetSystemMetrics(79));
         var inp = new INPUT {
             type = INPUT_MOUSE,
-            u = new INPUTUNION { mi = new MOUSEINPUT { dx = nx, dy = ny, dwFlags = ME_MOVE | ME_ABSOLUTE } }
+            u = new INPUTUNION { mi = new MOUSEINPUT { dx = nx, dy = ny, dwFlags = ME_MOVE | ME_ABSOLUTE | ME_VIRTUALDESK } }
         };
-        SendInput(1, new INPUT[] { inp }, InputSize);
+        Send(inp);
     }
 
     public static void MouseButton(uint flag, uint data = 0) {
@@ -118,7 +144,7 @@ public static class Gp {
             type = INPUT_MOUSE,
             u = new INPUTUNION { mi = new MOUSEINPUT { dx = 0, dy = 0, mouseData = data, dwFlags = flag } }
         };
-        SendInput(1, new INPUT[] { inp }, InputSize);
+        Send(inp);
     }
 
     public static void Wheel(int delta) {
@@ -268,17 +294,26 @@ try {
     throw
 }
 
-[void][Gp]::SetProcessDPIAware()
+[Gp]::EnsurePhysicalCoordinates()
+$script:EngineVersion = 2
+$script:CoordinateSystem = 'virtual-desktop-physical'
 
+
+function Get-DesktopRect {
+    [Gp]::EnsurePhysicalCoordinates()
+    return @{ x = [Gp]::GetSystemMetrics(76); y = [Gp]::GetSystemMetrics(77); w = [Gp]::GetSystemMetrics(78); h = [Gp]::GetSystemMetrics(79) }
+}
 
 function Get-WindowInfo($proc) {
+    [Gp]::EnsurePhysicalCoordinates()
+    if (-not [Gp]::IsWindow($proc)) { throw 'bound window no longer exists: reconnect with /game' }
     $rect = New-Object Gp+RECT
-    [void][Gp]::GetWindowRect($proc, [ref]$rect)
+    if (-not [Gp]::GetWindowRect($proc, [ref]$rect)) { throw 'window geometry query failed' }
     $crect = New-Object Gp+RECT
-    [void][Gp]::GetClientRect($proc, [ref]$crect)
+    if (-not [Gp]::GetClientRect($proc, [ref]$crect)) { throw 'window geometry query failed' }
     $origin = New-Object Gp+POINT
     $origin.X = 0; $origin.Y = 0
-    [void][Gp]::ClientToScreen($proc, [ref]$origin)
+    if (-not [Gp]::ClientToScreen($proc, [ref]$origin)) { throw 'window geometry query failed' }
     # 注意：变量名不能叫 $pid —— 那是 PowerShell 的自动只读变量，赋值会抛
     # "Cannot overwrite variable PID"，而回调里的 catch 会把它吞掉，表现就是
     # 「窗口枚举永远返回 0」。踩过一次，留着这条注释。
@@ -289,6 +324,7 @@ function Get-WindowInfo($proc) {
     $cls = New-Object System.Text.StringBuilder 256
     [void][Gp]::GetClassNameW($proc, $cls, 256)
     [pscustomobject]@{
+        coordinateSystem = $script:CoordinateSystem
         hwnd       = [int64]$proc
         title      = $title.ToString()
         cls        = $cls.ToString()

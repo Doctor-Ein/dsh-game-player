@@ -2,6 +2,15 @@
 *.log
 .snapshots/
 
+# 本地临时备份 / 中间版本（改代码时生成的，绝不进仓库）
+*.bak-*
+*.wip-*
+*.unified-*
+.game-backup-*/
+
+# 本地调试脚本（硬编码本机路径，各人自己用就行）
+tools/_*.ps1
+
 # 测试用的截图/录像帧（体积大，且随时可再生成）
 tools/chk*.png
 tools/scan*.png

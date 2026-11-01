@@ -7,10 +7,18 @@
 
 # 执行 waitfor 的 then。守卫模式会被重复调用，所以抽成函数。
 # 用 hashtable 传状态：函数内改 $state.aborted 能传回调用方（引用类型）。
+function Wait-InputDelay([int]$ms, [hashtable]$state) {
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($clock.ElapsedMilliseconds -lt $ms) {
+        if (Test-Abort $state.abortKey) { $state.aborted = $true; return }
+        Start-Sleep -Milliseconds ([int][Math]::Max(1, [Math]::Min(20, ($ms - $clock.ElapsedMilliseconds))))
+    }
+}
+
 function Invoke-ThenSteps($thens, [hashtable]$state) {
     foreach ($th in @($thens)) {
         if (-not $th) { continue }
-        if (Test-Abort $state.abortKey) { $state.aborted = $true; return }
+        if ($state.aborted -or (Test-Abort $state.abortKey)) { $state.aborted = $true; return }
         $tt = "$($th.t)".ToLowerInvariant()
         switch ($tt) {
             'key' {
@@ -19,27 +27,32 @@ function Invoke-ThenSteps($thens, [hashtable]$state) {
                 $holdMs = if ($th.ms) { [int]$th.ms } else { 60 }
                 $gapMs = if ($th.gap) { [int]$th.gap } else { 60 }
                 for ($i = 0; $i -lt $rep; $i++) {
+                    if ($state.aborted) { return }
                     [Gp]::KeySend([uint16]$vk, $false)
-                    Start-Sleep -Milliseconds $holdMs
+                    Wait-InputDelay $holdMs $state
                     [Gp]::KeySend([uint16]$vk, $true)
-                    if ($i -lt ($rep - 1)) { Start-Sleep -Milliseconds $gapMs }
+                    if ($state.aborted) { return }
+                    if ($i -lt ($rep - 1)) { Wait-InputDelay $gapMs $state }
                 }
                 [void]$state.trace.Add(@{ t = 'then:key'; k = "$($th.k)"; repeat = $rep })
             }
             'mouse' {
+                Move-ClickTarget $th
                 $btn = if ($th.btn) { "$($th.btn)" } else { 'left' }
                 $rep = if ($th.repeat) { [int][Math]::Max(1, [Math]::Min(20, $th.repeat)) } else { 1 }
                 $holdMs = if ($th.ms) { [int]$th.ms } else { 45 }
                 $gapMs = if ($th.gap) { [int]$th.gap } else { 60 }
                 for ($i = 0; $i -lt $rep; $i++) {
+                    if ($state.aborted) { return }
                     [Gp]::MouseButton((Get-BtnFlag $btn $false))
-                    Start-Sleep -Milliseconds $holdMs
+                    Wait-InputDelay $holdMs $state
                     [Gp]::MouseButton((Get-BtnFlag $btn $true))
-                    if ($i -lt ($rep - 1)) { Start-Sleep -Milliseconds $gapMs }
+                    if ($state.aborted) { return }
+                    if ($i -lt ($rep - 1)) { Wait-InputDelay $gapMs $state }
                 }
                 [void]$state.trace.Add(@{ t = 'then:mouse'; btn = $btn; repeat = $rep })
             }
-            'wait' { Start-Sleep -Milliseconds ([int]$th.ms) }
+            'wait' { Wait-InputDelay ([int]$th.ms) $state }
             'look' { if ($state.snap) { & $state.snap } }
             default { }
         }
@@ -72,13 +85,7 @@ function Invoke-Run($opt) {
 
     $rect = $null
     if ($cap -and $cap.enabled -ne $false) {
-        if ($cap.hwnd -or $cap.window) {
-            $h = Resolve-Hwnd @{ hwnd = $cap.hwnd; window = $cap.window }
-            $info = Get-WindowInfo $h
-            $rect = @{ x = $info.clientX; y = $info.clientY; w = $info.clientW; h = $info.clientH }
-        } elseif ($cap.w) {
-            $rect = @{ x = [int]$cap.x; y = [int]$cap.y; w = [int]$cap.w; h = [int]$cap.h }
-        }
+        $rect = Resolve-CaptureRect $cap
     }
 
     $every = if ($cap -and $cap.every) { [int]$cap.every } else { 1000 }
@@ -89,6 +96,7 @@ function Invoke-Run($opt) {
     $labels = New-Object System.Collections.ArrayList
     $trace = New-Object System.Collections.ArrayList
     $aborted = $false
+    $delayState = @{ abortKey = $abortKey; aborted = $false }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $nextCap = 0
 
@@ -96,6 +104,7 @@ function Invoke-Run($opt) {
         if (-not $rect) { return }
         if ($frames.Count -ge $maxFrames) { return }
         try {
+            if ($cap.hwnd) { $rect = Resolve-CaptureRect $cap }
             $f = Capture-Frame $rect.x $rect.y $rect.w $rect.h $scale
             [void]$frames.Add($f.path)
             [void]$labels.Add(("{0}  {1:N1}s" -f ($frames.Count), ($sw.Elapsed.TotalSeconds)))
@@ -111,6 +120,9 @@ function Invoke-Run($opt) {
 
         $t = "$($a.t)".ToLowerInvariant()
         try {
+            if ($opt.requireForeground -and $opt.hwnd -and [Gp]::GetForegroundWindow() -ne [IntPtr][int64]$opt.hwnd) {
+                throw 'bound window lost foreground: input stopped'
+            }
             switch ($t) {
                 'key' {
                     $vk = Get-Vk $a.k
@@ -129,7 +141,8 @@ function Invoke-Run($opt) {
                         }
                         [Gp]::KeySend([uint16]$vk, $true)
                         if ($aborted) { break }
-                        if ($i -lt ($rep - 1)) { Start-Sleep -Milliseconds $gap }
+                        if ($i -lt ($rep - 1)) { Wait-InputDelay $gap $delayState; $aborted = $delayState.aborted }
+                        if ($aborted) { break }
                     }
                 }
                 'mouse' {
@@ -141,9 +154,11 @@ function Invoke-Run($opt) {
                         'up' { [Gp]::MouseButton((Get-BtnFlag $a.btn $true)) }
                         'wheel' { [Gp]::Wheel([int]$a.dy) }
                         default {
+                            Move-ClickTarget $a
                             $hold = if ($a.ms) { [int]$a.ms } else { 50 }
                             [Gp]::MouseButton((Get-BtnFlag $a.btn $false))
-                            Start-Sleep -Milliseconds $hold
+                            Wait-InputDelay $hold $delayState
+                            $aborted = $delayState.aborted
                             [Gp]::MouseButton((Get-BtnFlag $a.btn $true))
                         }
                     }
@@ -158,7 +173,7 @@ function Invoke-Run($opt) {
                         }
                         if (Test-Abort $abortKey) { $aborted = $true; break }
                         $left = $ms - $s.ElapsedMilliseconds
-                        Start-Sleep -Milliseconds ([int][Math]::Min(30, [Math]::Max(5, $left)))
+                        Start-Sleep -Milliseconds ([int][Math]::Min(20, [Math]::Max(1, $left)))
                     }
                 }
                 'look' { & $snap; $nextCap = $sw.Elapsed.TotalMilliseconds + $every }
@@ -230,7 +245,9 @@ function Invoke-Run($opt) {
                             foreach ($tg in $targets) { if ($tg.fires.Count -gt 0) { $any = $true } }
                             if ($any) { break }
                         }
-                        Start-Sleep -Milliseconds $interval
+                        Wait-InputDelay $interval $state
+                        $aborted = $state.aborted
+                        if ($aborted) { break }
                     }
                     foreach ($tg in $targets) {
                         [void]$trace.Add(@{
@@ -249,6 +266,7 @@ function Invoke-Run($opt) {
         } catch {
             [Console]::Error.WriteLine("action failed: $t $($_.Exception.Message)")
             [void]$trace.Add(@{ t = $t; err = $_.Exception.Message })
+            $aborted = $true
         }
         [void]$trace.Add(@{ t = $t; at = [int]$sw.Elapsed.TotalMilliseconds })
         if ($aborted) { break }

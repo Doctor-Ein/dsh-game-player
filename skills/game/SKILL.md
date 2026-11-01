@@ -20,17 +20,39 @@ description: 用键鼠真正操作电脑上的游戏（截图 → 决定 → 按
 
 | 我想知道 | 去读 |
 | --- | --- |
+| 小按钮坐标怎么找、模板怎么录、旧接口怎么迁移 | [hands.md](hands.md) / [接口交接](../../docs/interfaces-v2.md) |
 | `game_do` 的 steps 怎么写、能不能按住 | [hands.md](hands.md) |
 | 一次动作用多久、几帧、什么时候该停手问人 | [loop.md](loop.md) |
 | 截图糊/黑、宫格看不懂、怎么确认是哪个界面 | [reading.md](reading.md) |
 | 打完这一关，经验写到哪里 / 用什么格式 | [learning.md](learning.md) |
-| 某个具体游戏的操作、界面、关卡 | `games/<游戏名>/SKILL.md`（见下） |
+| 某个具体游戏 / 某个活动模式的知识 | `games/<游戏>/modes/<模式>/SKILL.md`（见下） |
+
+## 目录组织
+
+```
+games/<游戏>/
+├── SKILL.md              只做导航
+└── modes/<模式>/          一个活动模式一个目录
+    ├── SKILL.md           这个模式是什么（流程、机制、界面）
+    ├── rules.md           规则 + 操作技巧
+    ├── controls.md        键位
+    ├── qte.md             QTE 探针
+    └── stages/            一关一个文件
+```
+
+**知识按模式分，不跨模式混。** 换一个活动模式就新建一个目录。
 
 ## 现有游戏
 
-| 游戏 | 入口 | 覆盖程度 |
+| 游戏 | 入口 | 已学的模式 |
 | --- | --- | --- |
-| 绝区零（Zenless Zone Zero）活动「浅层战斗」 | [games/zzz/SKILL.md](games/zzz/SKILL.md) | 只学过准备页 + 一关战斗，其余待补 |
+| 绝区零 | [games/zzz/SKILL.md](games/zzz/SKILL.md) | 浅层战斗（Combat-1、Combat-2 通关，S） |
+
+## 定位入口
+
+连接后有四个操作工具：game_shot / game_find / game_do / game_stop。小按钮先用 game_find 给出 center，再填入 click；不要从缩放宫格估计坐标。截图/模板 region 是客户区物理像素，网格/center/鼠标 x/y 是屏幕物理像素，允许副屏负坐标。QTE 仍用 game_do 的 waitfor，不改成反复调用 game_find。
+
+升级后重新加载插件、重开手并重新连接，确认引擎 v2。停止或换手后也要重新连接。
 
 ## 硬规则（任何游戏都不变）
 

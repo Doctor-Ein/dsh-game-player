@@ -12,40 +12,83 @@ if (-not (Test-Path $script:TmpDir)) { New-Item -ItemType Directory -Path $scrip
 $script:FrameSeq = 0
 
 
-function Capture-Frame($x, $y, $w, $h, $scale) {
+function Resolve-CaptureRect($opt) {
+    if ($opt.hwnd) {
+        $info = Get-WindowInfo ([IntPtr][int64]$opt.hwnd)
+        if ($info.minimized -or $info.clientW -le 0 -or $info.clientH -le 0) { throw 'window minimized or empty' }
+        $base = @{ x = $info.clientX; y = $info.clientY; w = $info.clientW; h = $info.clientH }
+        $r = $opt.region
+        $rx = 0; $ry = 0; $rw = $base.w; $rh = $base.h
+        if ($null -ne $r) {
+            foreach ($key in 'x','y','w','h') {
+                if ($null -eq $r.$key -or [double]$r.$key -ne [Math]::Truncate([double]$r.$key)) { throw 'region requires integer x,y,w,h in client physical pixels' }
+            }
+            $rx = [int]$r.x; $ry = [int]$r.y; $rw = [int]$r.w; $rh = [int]$r.h
+            if ($rx -lt 0 -or $ry -lt 0 -or $rw -le 0 -or $rh -le 0 -or $rx -ge $base.w -or $ry -ge $base.h) { throw 'region is outside window client area' }
+            $rw = [Math]::Min($rw, $base.w - $rx); $rh = [Math]::Min($rh, $base.h - $ry)
+        }
+        return @{ x = $base.x + $rx; y = $base.y + $ry; w = $rw; h = $rh; client = $base }
+    }
+    return @{ x = [int]$opt.x; y = [int]$opt.y; w = [int]$opt.w; h = [int]$opt.h }
+}
+
+function Capture-Frame($x, $y, $w, $h, $scale, [bool]$overlay = $false, [bool]$keepSource = $false) {
+    [Gp]::EnsurePhysicalCoordinates()
     if ($w -le 0 -or $h -le 0) { throw "bad capture size ${w}x${h}" }
-    # 屏幕尺寸走 Win32，不用 System.Windows.Forms —— 那个程序集在 scriptblock 加载
-    # 上下文里拿不到类型（[System.Windows.Forms.Screen] 解析失败），没必要为它留依赖。
-    $swW = [Gp]::GetSystemMetrics(0)
-    $swH = [Gp]::GetSystemMetrics(1)
-    if ($x -lt 0) { $x = 0 }
-    if ($y -lt 0) { $y = 0 }
-    if (($x + $w) -gt $swW) { $w = [Math]::Max(8, $swW - $x) }
-    if (($y + $h) -gt $swH) { $h = [Math]::Max(8, $swH - $y) }
+    $desktop = Get-DesktopRect
+    $right = [Math]::Min(([long]$x + $w), ($desktop.x + $desktop.w))
+    $bottom = [Math]::Min(([long]$y + $h), ($desktop.y + $desktop.h))
+    $x = [int][Math]::Max($x, $desktop.x); $y = [int][Math]::Max($y, $desktop.y)
+    $w = [int]($right - $x); $h = [int]($bottom - $y)
+    if ($w -le 0 -or $h -le 0) { throw 'capture does not intersect virtual desktop' }
+    if (-not $scale) { $scale = 1.0 }
+    if ($scale -lt 0.2 -or $scale -gt 1 -or [double]::IsNaN($scale)) { throw 'scale must be 0.2..1' }
     $bmp = New-Object System.Drawing.Bitmap($w, $h, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $id = [Guid]::NewGuid().ToString('N')
+    $path = Join-Path $script:TmpDir ("shot-$id.png")
+    $rawPath = Join-Path $script:TmpDir ("source-$id.png")
     try {
-        $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
-    } finally {
-        $g.Dispose()
-    }
-    if ($scale -and $scale -lt 1) {
-        $nw = [int][Math]::Max(1, [Math]::Round($w * $scale))
-        $nh = [int][Math]::Max(1, [Math]::Round($h * $scale))
-        $small = New-Object System.Drawing.Bitmap($nw, $nh, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-        $g2 = [System.Drawing.Graphics]::FromImage($small)
-        $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $g2.DrawImage($bmp, 0, 0, $nw, $nh)
-        $g2.Dispose()
-        $bmp.Dispose()
-        $bmp = $small
-    }
-    $script:FrameSeq++
-    $path = Join-Path $script:TmpDir ("f{0:D5}-{1}.png" -f $script:FrameSeq, [int](Get-Random -Maximum 99999))
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $res = @{ path = $path; w = $bmp.Width; h = $bmp.Height }
-    $bmp.Dispose()
-    return $res
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        try { $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h))) }
+        finally { $g.Dispose() }
+        if ($keepSource) { $bmp.Save($rawPath, [System.Drawing.Imaging.ImageFormat]::Png) }
+        if ($scale -lt 1) {
+            $nw = [int][Math]::Max(1, [Math]::Round($w * $scale)); $nh = [int][Math]::Max(1, [Math]::Round($h * $scale))
+            $small = New-Object System.Drawing.Bitmap($nw, $nh, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+            $g = [System.Drawing.Graphics]::FromImage($small)
+            try {
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $g.DrawImage($bmp, 0, 0, $nw, $nh)
+            } finally { $g.Dispose() }
+            $bmp.Dispose(); $bmp = $small
+        }
+        if ($overlay) { Draw-CoordinateGrid $bmp $x $y $w $h }
+        $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+        return @{ path = $path; w = $bmp.Width; h = $bmp.Height; source = @{ x = $x; y = $y; w = $w; h = $h }; scaleX = $bmp.Width / [double]$w; scaleY = $bmp.Height / [double]$h; shotId = $id; rawPath = $rawPath; coordinateSystem = $script:CoordinateSystem }
+    } finally { $bmp.Dispose() }
+}
+
+function Draw-CoordinateGrid($bmp, $x, $y, $w, $h) {
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(140, 0, 255, 220), 1)
+    $font = New-Object System.Drawing.Font('Consolas', 10)
+    $bg = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(210, 0, 0, 0))
+    try {
+        $sx = $bmp.Width / [double]$w; $sy = $bmp.Height / [double]$h
+        $step = [int]([Math]::Ceiling(100 / [Math]::Min($sx, $sy) / 100) * 100)
+        for ($xx = [Math]::Ceiling($x / $step) * $step; $xx -lt ($x + $w); $xx += $step) {
+            $px = [float](($xx - $x) * $sx)
+            $g.DrawLine($pen, $px, [float]0, $px, [float]$bmp.Height)
+            $g.FillRectangle($bg, $px, [float]0, [float]70, [float]18)
+            $g.DrawString("X=$xx", $font, [System.Drawing.Brushes]::White, $px, [float]0)
+        }
+        for ($yy = [Math]::Ceiling($y / $step) * $step; $yy -lt ($y + $h); $yy += $step) {
+            $py = [float](($yy - $y) * $sy)
+            $g.DrawLine($pen, [float]0, $py, [float]$bmp.Width, $py)
+            $g.FillRectangle($bg, [float]0, $py, [float]70, [float]18)
+            $g.DrawString("Y=$yy", $font, [System.Drawing.Brushes]::White, [float]0, $py)
+        }
+    } finally { $bg.Dispose(); $font.Dispose(); $pen.Dispose(); $g.Dispose() }
 }
 
 function Build-Sheet($paths, $cols, $cellW, $labels) {

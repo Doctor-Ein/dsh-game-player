@@ -12,6 +12,19 @@
 #>
 
 $here = $PSScriptRoot
-foreach ($part in 'win32.ps1', 'eyes.ps1', 'hands.ps1', 'run.ps1', 'engine.ps1') {
+foreach ($part in 'win32.ps1', 'eyes.ps1', 'positioning.ps1', 'hands.ps1', 'run.ps1', 'engine.ps1') {
     . (Join-Path $here $part)
 }
+
+# Hash the actual loaded engine manifest. The host uses the same byte hashes to
+# reject a stale hand before arming, rather than guessing from the process name.
+$engineFiles = 'lib/win32.ps1','lib/eyes.ps1','lib/positioning.ps1','lib/matcher.cs','lib/hands.ps1','lib/run.ps1','lib/engine.ps1','lib/helper.ps1','tools/game-hand.ps1'
+$engineRoot = Split-Path $here -Parent
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $hashes = @($engineFiles | ForEach-Object {
+        ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes((Join-Path $engineRoot $_))))).Replace('-','').ToLowerInvariant()
+    })
+    $script:EngineRevision = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes(($hashes -join "`n"))))).Replace('-','').ToLowerInvariant()
+}
+finally { $sha.Dispose() }

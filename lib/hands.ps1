@@ -43,7 +43,8 @@ function Test-Abort($key) {
     return [bool][Gp]::IsDown((Get-Vk $key))
 }
 
-function Release-All {
+function Release-All([switch]$Verify) {
+    $failures = @()
     $vks = @()
     # 那个字符串里有个空格当分隔符，Get-Vk 不认空格 → 直接跳过，别让"松手"本身抛异常。
     foreach ($ch in 'wasdqe rfctvbnmhjkliopuxyzg1234'.ToCharArray()) {
@@ -52,11 +53,20 @@ function Release-All {
     }
     $vks += 0x20, 0x10, 0x11, 0x12, 0x09, 0x1B
     foreach ($vk in ($vks | Select-Object -Unique)) {
-        try { [Gp]::KeySend([uint16]$vk, $true) } catch { }
+        try { [Gp]::KeySend([uint16]$vk, $true) } catch { $failures += $_.Exception.Message }
     }
     foreach ($f in @([Gp]::ME_LEFTUP, [Gp]::ME_RIGHTUP, [Gp]::ME_MIDDLEUP)) {
-        try { [Gp]::MouseButton($f) } catch { }
+        try { [Gp]::MouseButton($f) } catch { $failures += $_.Exception.Message }
     }
     $script:KnownVk = @()
+    if ($Verify -and $failures.Count) { throw "input release failed: $($failures[0])" }
 }
 
+
+# Click coordinates, when supplied, are absolute physical screen pixels (including negatives).
+function Move-ClickTarget($step) {
+    if ($null -ne $step.x -or $null -ne $step.y) {
+        if ($null -eq $step.x -or $null -eq $step.y) { throw 'click needs both x and y' }
+        [Gp]::MouseMoveAbs([int]$step.x, [int]$step.y)
+    }
+}

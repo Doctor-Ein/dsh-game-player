@@ -1,6 +1,6 @@
-# 绝区零 · QTE 识别（被动 QTE 为主）
+# 绝区零 · QTE 识别
 
-> 状态：**已实现进引擎，待真机验收**（未在真实 QTE 上按过）。
+> 状态：**已实机验证**。2026-11-01 多次接住（`hit=true`），主动/反击两种都跑通。
 > 标定台：`tools/calibrate_qte.py`；样本：`2026-10-31 08-52-20.mp4` 的 12:47–12:52。
 
 ## QTE 长什么样（实测，不是猜）
@@ -63,24 +63,28 @@ band      cy 在 0.12..0.72
 被动 QTE 才是识别的真正价值：我们不需要看懂敌人抬手，只要能预判"下一手是敌人"，
 在那一段里开着探针，剩下交给本地反射。
 
-## 用法（接口没变）
+## 用法（探针名）
 
 ```json
-{"t":"waitfor","probe":"qte","timeoutMs":1200,
+{"t":"waitfor","probe":"qte_flag","timeoutMs":4000,
  "then":{"t":"mouse","a":"click","btn":"left"}}
 ```
 
-连点型用 `then.repeat`；右键型换 `probe:"qte_right"` + `btn:"right"`。
+- `qte_flag` → 主动 QTE，**左键**
+- `qte_counterattack` → 反击 QTE，**右键**
+- 连点型用 `then.repeat`；`qte` / `qte_right` 是保留的通用探针
 
-## 实现状态（2026-11-01）
+**什么时候架哪个**见 [rules.md](rules.md) 第一节——不要并联。
+
+## 实现状态（2026-11-01 更新）
 
 | 环节 | 状态 |
 | --- | --- |
 | 判据 | ✅ 两段录像、3 个 QTE 事件、零误报 |
 | 离线检测器 | ✅ `tools/qte_detect.py` |
 | 运行时检测器 | ✅ `lib/win32.ps1` 的 `Gp.ScanQte`（C#） |
-| 接进 `waitfor` | ✅ 探针名 `qte` / `ring` 自动走圆环检测 |
-| 真机按下去 | ❌ 还没在真实 QTE 上验证过 |
+| 接进 `waitfor` | ✅ `qte_flag` / `qte_counterattack` 两个命名探针 |
+| **真机按下去** | ✅ **已多次接住**（主动 + 反击），2026-11-01 |
 
 ### 实测延迟
 

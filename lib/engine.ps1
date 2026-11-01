@@ -27,8 +27,9 @@ function Invoke-GpLine([string]$line) {
         $id = $req.id
         $cmd = "$($req.cmd)"
         $a = $req.args
+        [Gp]::EnsurePhysicalCoordinates()
         switch ($cmd) {
-            'ping' { $res = @{ ok = $true; pid = $PID; tmp = $script:TmpDir } }
+            'ping' { $res = @{ ok = $true; pid = $PID; tmp = $script:TmpDir; engineVersion = $script:EngineVersion; engineRevision = $script:EngineRevision; coordinateSystem = $script:CoordinateSystem; desktop = (Get-DesktopRect) } }
             'windows' {
                 $ws = Get-Windows $a.filter
                 $res = @{ windows = @($ws | Select-Object -First 40) }
@@ -41,8 +42,13 @@ function Invoke-GpLine([string]$line) {
                 $res = Get-WindowInfo $h
             }
             'cap' {
-                $res = Capture-Frame ([int]$a.x) ([int]$a.y) ([int]$a.w) ([int]$a.h) ([double]($a.scale))
+                $rect = Resolve-CaptureRect $a
+                $res = Capture-Frame $rect.x $rect.y $rect.w $rect.h ([double]$a.scale) ([bool]$a.overlay) $true
+                $res.client = $rect.client
+                $res.hwnd = $a.hwnd
+                Register-PositionShot $res
             }
+            'find' { $res = Invoke-PositionFind $a }
             'sheet' {
                 $res = Build-Sheet @($a.paths) ([int]$a.cols) ([int]$a.cellW) @($a.labels)
             }
@@ -69,7 +75,7 @@ function Invoke-GpLine([string]$line) {
                 $pr = if ($a.probe) { $a.probe } else { 'qte' }
                 $res = Test-Probe $pr $w0
             }
-            'release' { Release-All; $res = @{ released = $true } }
+            'release' { Release-All -Verify; $res = @{ released = $true } }
             'cursor' {
                 $p = New-Object Gp+POINT
                 [void][Gp]::GetCursorPos([ref]$p)

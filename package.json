@@ -1,8 +1,10 @@
 {
   "name": "dsh-game-player",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/tools.js && node --check lib/bridge.js && node --check lib/session.js"
+    "check": "node --check lib/index.js && node --check lib/tools.js && node --check lib/hand-link.js",
+    "test": "node --test test/*.test.js && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/positioning.test.ps1 && powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/run.test.ps1",
+    "test:cursor": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/positioning.test.ps1 -CursorCheck"
   },
   "description": "Give the model eyes (screen capture) and a hand (real keyboard/mouse via SendInput) plus a growing skill tree, so it can actually play a game - block-level decisions, human-speed input, F12 kill switch.",
   "private": true,
@@ -19,8 +21,19 @@
   },
   "files": [
     "lib",
+    "tools/game-hand.ps1",
+    "tools/elevate.ps1",
+    "tools/tpl3-counter.png",
+    "tools/tpl3-flag.png",
+    "tools/tpl2-counter.png",
+    "tools/tpl2-flag.png",
+    "tools/tpl-counter.png",
+    "tools/tpl-flag.png",
+    "start-gameplay.cmd",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "skills",
+    "docs"
   ],
   "keywords": [
     "dsh",

@@ -43,6 +43,13 @@ $root = Join-Path $env:TEMP 'dsh-game-player'
 $handFile = Join-Path $root 'hand.json'
 $exitCode = 0
 
+function Remove-OwnHandCard {
+    try {
+        $current = Get-Content -LiteralPath $handFile -Raw | ConvertFrom-Json
+        if ([int]$current.pid -eq $PID) { Remove-Item -LiteralPath $handFile }
+    } catch { }
+}
+
 try {
     if (-not (Test-Path $root)) { New-Item -ItemType Directory -Path $root -Force | Out-Null }
 
@@ -59,14 +66,19 @@ try {
     Write-Log 'engine loaded (Win32 compiled, DPI aware)'
 
     $card = [ordered]@{
+        engineVersion = $script:EngineVersion
+        engineRevision = $script:EngineRevision
+        coordinateSystem = $script:CoordinateSystem
         pid       = $PID
         pipe      = $PipeName
         startedAt = (Get-Date).ToString('o')
         psVersion = $PSVersionTable.PSVersion.ToString()
         mode      = $(if ($SelfTest) { 'selftest' } else { 'play' })
     }
-    $card | ConvertTo-Json -Compress | Set-Content -Path $handFile -Encoding UTF8
-    Write-Log "name card: $handFile"
+    if (-not $SelfTest) {
+        $card | ConvertTo-Json -Compress | Set-Content -Path $handFile -Encoding UTF8
+        Write-Log "name card: $handFile"
+    }
 
     # -------------------------------------------------------------- selftest
     if ($SelfTest) {
@@ -76,7 +88,6 @@ try {
         $shot = Capture-Frame 0 0 $w $h 0.5
         Write-Log "shot: $($shot.path) ($($shot.w)x$($shot.h))"
         Write-Log 'SELFTEST PASSED'
-        try { Remove-Item $handFile -ErrorAction SilentlyContinue } catch { }
         Write-Host ''
         Write-Host ('  SELFTEST PASSED  ->  ' + $shot.path) -ForegroundColor Green
         if (-not $env:GP_NO_PAUSE) { Read-Host 'press Enter to close' }
@@ -102,14 +113,15 @@ try {
     Write-Host '  hand is ready, waiting for /game in DSH ... (keep this window open)' -ForegroundColor Cyan
 
     while ($true) {
-        $writer = $null; $reader = $null; $pipe = $null
+        $writer = $null; $reader = $null; $pipe = $null; $hadConnection = $false
         try {
             $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $PipeName, [System.IO.Pipes.PipeDirection]::InOut)
             $pipe.Connect(1500)
+            $hadConnection = $true
             $reader = New-Object System.IO.StreamReader($pipe, [System.Text.Encoding]::UTF8)
             $writer = New-Object System.IO.StreamWriter($pipe, (New-Object System.Text.UTF8Encoding($false)))
             $writer.AutoFlush = $true
-            $writer.WriteLine((@{ hello = $true; pid = $PID; mode = 'pipe'; elevated = $isAdmin } | ConvertTo-Json -Compress))
+            $writer.WriteLine((@{ hello = $true; pid = $PID; mode = 'pipe'; elevated = $isAdmin; engineVersion = $script:EngineVersion; engineRevision = $script:EngineRevision; coordinateSystem = $script:CoordinateSystem } | ConvertTo-Json -Compress))
             Write-Log ('CONNECTED - hand attached (elevated={0}), listening to DSH' -f $isAdmin)
 
             while ($true) {
@@ -131,6 +143,7 @@ try {
                 Write-Log "connect wait: $msg"
             }
         } finally {
+            try { if ($hadConnection) { Release-All } } catch { }
             try { if ($writer) { $writer.Dispose() } } catch { }
             try { if ($reader) { $reader.Dispose() } } catch { }
             try { if ($pipe) { $pipe.Dispose() } } catch { }
@@ -146,7 +159,7 @@ try {
     if (-not $env:GP_NO_PAUSE) { Read-Host 'press Enter to close' }
 } finally {
     try { Release-All } catch { }
-    try { Remove-Item $handFile -ErrorAction SilentlyContinue } catch { }
+    Remove-OwnHandCard
     Write-Log 'game-hand stopped, all keys released'
 }
 
